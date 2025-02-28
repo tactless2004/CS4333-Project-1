@@ -46,16 +46,14 @@ def generic_send(ip_address: str, port: int, client_socket: socket, client_close
     while Sending and not client_closed:
         message = sys.stdin.readline()
         sent_exit = (message == EXIT_STRING)
-
-        print(client_closed)
-        if message and sent_exit and not client_closed:
-            client_socket.send(EXIT_STRING.encode())
-            Sending = False
-        elif message:
-            client_socket.send(f"{message}".encode())
-
-        if client_closed:
-            Sending = False
+        try:
+            if message and sent_exit:
+                client_socket.send(EXIT_STRING.encode())
+                Sending = False
+            elif message:
+                client_socket.send(f"{message}".encode())
+        except OSError:
+            Sending=False # Not graceful handling here.
 
 
 def generic_receive(ip_address: str, port: int, client_socket: socket, client_closed: bool) -> None:
@@ -67,6 +65,7 @@ def generic_receive(ip_address: str, port: int, client_socket: socket, client_cl
             if message and message.decode() == EXIT_STRING:
                 Connected = False
                 client_closed = True
+                print("EXIT STRING RECEIEVED")
                 client_socket.close()
             elif message:
                 print(f"[remote] {message.decode()}")
