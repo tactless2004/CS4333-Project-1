@@ -45,7 +45,7 @@ def init_server(ip_address: str, port: int, input_handler: Process) -> None:
 
     while Listening: # Listening mode :)
         if not pid_exists(input_handler.pid): # If we just exitted connecting mode, we need to reinit the nonbound_input_handler
-            input_handler = Process(target = nonbound_input_handler, args=(LOOPBACK_ADDR, PORT, is_server))
+            input_handler = Process(target = nonbound_input_handler, args=(ip_address, port, is_server))
             input_handler.start()
 
         client_socket, client_address = server_socket.accept()
