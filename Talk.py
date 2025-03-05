@@ -2,7 +2,6 @@ from socket import socket, AF_INET, SOCK_STREAM, timeout
 import sys
 from threading import Thread
 from multiprocessing import Process
-import os
 from signal import SIGINT
 from psutil import pid_exists # Check if  a Windows Process still exists, useful in input handler logic.
 from colorama import Fore # ANSI escape codes for color
@@ -35,7 +34,6 @@ from colorama import Fore # ANSI escape codes for color
 # TODO: maybe we do something more elegant later
 ip_address = '127.0.0.1'
 PORT = 12987    # Default provided by Prof. Riley
-BUFFER = bytearray(4096)
 EXIT_STRING = "QUIT\n"
 STATUS_STRING = "STATUS\n"
 
@@ -54,7 +52,10 @@ def print_help_message() -> None:
     print(f"{Fore.RED}AUTO MODE\n    {Fore.BLUE}usage: python Talk.py -a [hostname | IPaddress] [-p portnumber]\n{Fore.RESET}")
 
 # Generic warning printer.
-def print_runtime_error(warning = "Talk.py has encountered an unrecoverable issue.") -> None:
+def print_runtime_error(warning:str , input_handler: Process) -> None:
+    if input_handler:
+        input_handler.kill()
+
     raise RuntimeError(warning)
 
 def init_server(ip_address: str, port: int, input_handler: Process) -> None:
@@ -63,7 +64,8 @@ def init_server(ip_address: str, port: int, input_handler: Process) -> None:
     try:
         server_socket.bind((ip_address, port))
     except OSError:
-        print_runtime_error("Server unable to listen on specified port.")
+        server_socket.close()
+        print_runtime_error("Server unable to listen on specified port.", input_handler)
 
     Listening = True
     server_socket.listen(1) # 1 specifies the maximum number of clients that can connect to this socket.
@@ -84,7 +86,7 @@ def init_server(ip_address: str, port: int, input_handler: Process) -> None:
             continue
         
         if pid_exists(input_handler.pid): # Sometimes the non-bound input handler is already dead, before we hit this point.
-            os.kill(input_handler.pid, SIGINT)
+            input_handler.kill()
 
         closed_state = [False] # closed_state is a shared boolean that tells generic_send to exit, whenever generic receive gets the EXIT signal.
 
@@ -108,7 +110,7 @@ def init_client(ip_address: str, port: int, input_handler: Process) -> None:
     try:
         client_socket.connect((ip_address, port))
     except ConnectionRefusedError:
-        print_runtime_error("Client unable to communicate with server.")
+        print_runtime_error("Client unable to communicate with server.", input_handler)
     
     # Need this data for 'STATUS' request
     server_address = client_socket.getpeername()    
@@ -116,7 +118,7 @@ def init_client(ip_address: str, port: int, input_handler: Process) -> None:
 
     # 3. Kill the non-bound input handler.
     if pid_exists(input_handler.pid):
-        os.kill(input_handler.pid, SIGINT) # Replace the nonbound input handler with a socket bound input handler
+        input_handler.kill() # Replace the nonbound input handler with a socket bound input handler
 
     closed_state = [False] # This variable is shared between sender and receiver, if the sender sends exit it tells its own receiver to exit via this variable (and vice-versa).
 
@@ -128,7 +130,7 @@ def init_client(ip_address: str, port: int, input_handler: Process) -> None:
     while not processKilled:
         if closed_state[0]:
             processKilled = True
-            os.kill(send.pid, SIGINT)
+            send.kill()
         elif not pid_exists(send.pid) and not closed_state[0]:
             processKilled = True
 
@@ -210,9 +212,8 @@ def generic_receive(ip_address: str, port: int, client_socket: socket, closed_st
             Connected = False
 
 def close_input_handler(input_handler: Process) -> bool:
-    pid = input_handler.pid
-    if pid_exists(pid):
-        os.kill(pid, SIGINT)
+    if pid_exists(input_handler.pid):
+        input_handler.kill
         return True
     else:
         return False
@@ -223,11 +224,11 @@ def nonbound_input_handler(ip_address: str, port: int, is_server: bool, auto_mod
         message = sys.stdin.readline()
         if message.strip() == "STATUS":
             if auto_mode:
-                print(f"[STATUS] Client: NONE; Server: NONE\n")
+                print(f"[STATUS] Client: NONE; Server: NONE")
             elif is_server:
-                print(f"[STATUS] Client: NONE; Server: {ip_address}:{port}\n")
+                print(f"[STATUS] Client: NONE; Server: {ip_address}:{port}")
             elif not is_server:
-                print(f"[STATUS] Client: {ip_address}:{port}; Server: NONE\n")
+                print(f"[STATUS] Client: {ip_address}:{port}; Server: NONE")
             else:
                 print(f"Check Semantic Logic, this should be impossible.")
 
@@ -243,7 +244,7 @@ if __name__ == "__main__":
     if args_not_provided:
         print_help_message()
         sys.exit()
-        
+
     is_server = (sys.argv[0]=="-s") if not args_not_provided else False
     is_client = (sys.argv[0]=='-h') if not args_not_provided else False
     is_auto = (sys.argv[0]=='-a') if not args_not_provided else False
@@ -255,7 +256,7 @@ if __name__ == "__main__":
             try:
                 PORT = int(sys.argv[2])
             except ValueError:
-                print_runtime_error("Invalid Port.")
+                print_runtime_error("Invalid Port.", input_handler=None)
         input_handler = Process(target = nonbound_input_handler, args=(ip_address, PORT, is_server, False))
         input_handler.start()
         init_server(ip_address, PORT, input_handler)
@@ -271,13 +272,13 @@ if __name__ == "__main__":
             try:
                 PORT = int(sys.argv[3])
             except ValueError:
-                print_runtime_error("Invalid Port.")
+                print_runtime_error("Invalid Port.", input_handler=None)
 
         elif not_host_provided_and_port_provided:
             try:
                 PORT = int(sys.argv[2])
             except ValueError:
-                print_runtime_error("Invalid Port.")          
+                print_runtime_error("Invalid Port.", input_handler=None)          
         if is_client:
             input_handler = Process(target = nonbound_input_handler, args=(ip_address, PORT, is_server, False))
             input_handler.start()
@@ -290,4 +291,4 @@ if __name__ == "__main__":
     elif is_help:
         print_help_message()
     else:
-        print("This shouldn't happen, check for semantic error.")
+        print_help_message() # If it falls all the way through, there was some bad args that weren't caught.
