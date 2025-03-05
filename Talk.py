@@ -76,7 +76,6 @@ def init_server(ip_address: str, port: int, input_handler: Process) -> None:
         client_socket, client_address = server_socket.accept()
         # client_address -> (hostname, port)
         # client_socket -> socket.socket
-        print (f"Connection Initiated by {client_address} on port {PORT}")
  
         closed_state = [False] # closed_state is a shared boolean that tells generic_send to exit, whenever generic receive gets the EXIT signal.
         if pid_exists(input_handler.pid): # Sometimes the non-bound input handler is already dead, before we hit this point.
