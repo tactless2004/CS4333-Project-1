@@ -1,11 +1,11 @@
-from socket import socket, AF_INET, SOCK_STREAM
+from socket import socket, AF_INET, SOCK_STREAM, timeout
 import sys
 from threading import Thread
 from multiprocessing import Process
 import os
-import signal
+from signal import SIGINT
 from psutil import pid_exists # Check if  a Windows Process still exists, useful in input handler logic.
-from colorama import Fore
+from colorama import Fore # ANSI escape codes for color
 
 # CS 4333 Project 1
 
@@ -25,7 +25,7 @@ from colorama import Fore
 #       - Why do I have two input handlers?
 #           -   When the program first inits, it's either a server bound on a socket waiting to be connected to or a client trying to connect to a server.
 #           -   for this period of time I want an input handler that handles 'STATUS' and 'QUIT' messages, but doesn't attempt to send. Also, if a server is connected
-#               to a client, the client disconnects and the server is back in listening state, we want this non-sending input handler.
+#               to a client, the client disconnects and the server is back in listening state, we want a non-sending input handler.
 #       - Why is there generic_send() and generic_receieve() instead of server/client specific functions?
 #           -   The server send and client send are basically the same, the only difference is how the server can have multiple client interactions before it exits.
 #           -   If a project requirement was to support multiple clients simulataneously, we would need a server_receive() function.
@@ -33,7 +33,7 @@ from colorama import Fore
 
 # Global Constants
 # TODO: maybe we do something more elegant later
-LOOPBACK_ADDR = '127.0.0.1'
+ip_address = '127.0.0.1'
 PORT = 12987    # Default provided by Prof. Riley
 BUFFER = bytearray(4096)
 EXIT_STRING = "QUIT\n"
@@ -67,19 +67,26 @@ def init_server(ip_address: str, port: int, input_handler: Process) -> None:
 
     Listening = True
     server_socket.listen(1) # 1 specifies the maximum number of clients that can connect to this socket.
+    server_socket.settimeout(0.2)
 
     while Listening: # Listening mode :)
         if not pid_exists(input_handler.pid): # If we just exitted connecting mode, we need to reinit the nonbound_input_handler
             input_handler = Process(target = nonbound_input_handler, args=(ip_address, port, True, False))
             input_handler.start()
-
-        client_socket, client_address = server_socket.accept()
-        # client_address -> (hostname, port)
-        # client_socket -> socket.socket
- 
-        closed_state = [False] # closed_state is a shared boolean that tells generic_send to exit, whenever generic receive gets the EXIT signal.
+        try:
+            client_socket, client_address = server_socket.accept()
+            # client_address -> (hostname, port)
+            # client_socket -> socket.socket
+        except timeout:
+            # Handles when nonbound input handler has exitted, indiciating that 'QUIT' command has been sent.
+            if not pid_exists(input_handler.pid): 
+                sys.exit()
+            continue
+        
         if pid_exists(input_handler.pid): # Sometimes the non-bound input handler is already dead, before we hit this point.
-            os.kill(input_handler.pid, signal.SIGINT)
+            os.kill(input_handler.pid, SIGINT)
+
+        closed_state = [False] # closed_state is a shared boolean that tells generic_send to exit, whenever generic receive gets the EXIT signal.
 
         Thread(target=generic_receive, args=(ip_address, port, client_socket, closed_state), daemon=True).start()
         p = Process(target=generic_send, args=(ip_address, port, client_socket, True, client_address, closed_state))
@@ -87,7 +94,7 @@ def init_server(ip_address: str, port: int, input_handler: Process) -> None:
         waitingToKillSender = True
         while waitingToKillSender:
             if closed_state[0]:  # When the generic_recieve() function indiciates that the QUIT message has been received, we want to kill the sender to prevent deadlock
-                os.kill(p.pid, signal.SIGINT)
+                p.kill()
                 waitingToKillSender = False
             elif not pid_exists(p.pid) and not closed_state[0]:  # If the generic_send method sends the EXIT message it should exit cleanly, in this case we don't need to close the sender manually
                 waitingToKillSender = False
@@ -108,7 +115,8 @@ def init_client(ip_address: str, port: int, input_handler: Process) -> None:
     (ip_address, port) = client_socket.getsockname()
 
     # 3. Kill the non-bound input handler.
-    os.kill(input_handler.pid, signal.SIGINT) # Replace the nonbound input handler with a socket bound input handler
+    if pid_exists(input_handler.pid):
+        os.kill(input_handler.pid, SIGINT) # Replace the nonbound input handler with a socket bound input handler
 
     closed_state = [False] # This variable is shared between sender and receiver, if the sender sends exit it tells its own receiver to exit via this variable (and vice-versa).
 
@@ -120,7 +128,7 @@ def init_client(ip_address: str, port: int, input_handler: Process) -> None:
     while not processKilled:
         if closed_state[0]:
             processKilled = True
-            os.kill(send.pid, signal.SIGINT)
+            os.kill(send.pid, SIGINT)
         elif not pid_exists(send.pid) and not closed_state[0]:
             processKilled = True
 
@@ -147,28 +155,41 @@ def generic_send(ip_address: str, port: int, client_socket: socket, is_server: b
 
 def init_auto(ip_address: str, port: int, input_handler: Process) -> None:
     client_socket = socket(AF_INET, SOCK_STREAM)
-    
     # 1. Try to connect as a client, if this fails, try to connect as a server.
     try:
         client_socket.connect((ip_address, port))
-        client_socket.close()
 
-        # 1a. input_handler mode: auto -> client
+        # Need this data for 'STATUS' request
+        server_address = client_socket.getpeername()    
+        (ip_address, port) = client_socket.getsockname()
+
+        # 1b. Kill the non-bound input handler.
         close_input_handler(input_handler)
-        input_handler = Process(target=nonbound_input_handler, args=(ip_address, port, False, False))
-        input_handler.start()
 
-        init_client(ip_address, port, input_handler)
+        closed_state = [False] # This variable is shared between sender and receiver, if the sender sends exit it tells its own receiver to exit via this variable (and vice-versa).
+
+        # 4. Start the receiver
+        Thread(target=generic_receive, args=(ip_address, port, client_socket, closed_state), daemon=True).start()
+        send = Process(target=generic_send, args=(ip_address, port, client_socket, False, server_address, closed_state)) # Changed this to not thread
+        send.start()
+        processKilled = False
+        while not processKilled:
+            if closed_state[0]:
+                processKilled = True
+                close_input_handler(send)
+            elif not pid_exists(send.pid) and not closed_state[0]:
+                processKilled = True
     
     # 2. If server DNE, become server.
     except ConnectionRefusedError:
+        print("Client unable to communicate with server.")
+        client_socket.close()
         # 2a. input_handler mode: auto -> server 
         close_input_handler(input_handler)
         input_handler = Process(target=nonbound_input_handler, args=(ip_address, port, True, False))
         input_handler.start()
 
         init_server(ip_address, port, input_handler)
-
 
 def generic_receive(ip_address: str, port: int, client_socket: socket, closed_state: list) -> None:
     Connected = True
@@ -191,7 +212,7 @@ def generic_receive(ip_address: str, port: int, client_socket: socket, closed_st
 def close_input_handler(input_handler: Process) -> bool:
     pid = input_handler.pid
     if pid_exists(pid):
-        os.kill(pid, signal.SIGINT)
+        os.kill(pid, SIGINT)
         return True
     else:
         return False
@@ -219,6 +240,10 @@ if __name__ == "__main__":
     # Note: Bad arguments are an exit condition.
     #       We don't proceed after bad args.
     args_not_provided = (len(sys.argv) == 0)
+    if args_not_provided:
+        print_help_message()
+        sys.exit()
+        
     is_server = (sys.argv[0]=="-s") if not args_not_provided else False
     is_client = (sys.argv[0]=='-h') if not args_not_provided else False
     is_auto = (sys.argv[0]=='-a') if not args_not_provided else False
@@ -231,13 +256,13 @@ if __name__ == "__main__":
                 PORT = int(sys.argv[2])
             except ValueError:
                 print_runtime_error("Invalid Port.")
-        input_handler = Process(target = nonbound_input_handler, args=(LOOPBACK_ADDR, PORT, is_server, False))
+        input_handler = Process(target = nonbound_input_handler, args=(ip_address, PORT, is_server, False))
         input_handler.start()
-        init_server(LOOPBACK_ADDR, PORT, input_handler)
+        init_server(ip_address, PORT, input_handler)
 
     elif is_client or is_auto:
         host_provided = len(sys.argv) >= 2 and sys.argv[1] != "-p"
-        LOOPBACK_ADDR = sys.argv[1] if host_provided else LOOPBACK_ADDR
+        ip_address = sys.argv[1] if host_provided else ip_address
         # Port Logic
         host_provided_and_port_provided = host_provided and len(sys.argv) == 4
         not_host_provided_and_port_provided = not host_provided and len(sys.argv) == 3 and sys.argv[1] == "-p"
@@ -254,13 +279,13 @@ if __name__ == "__main__":
             except ValueError:
                 print_runtime_error("Invalid Port.")          
         if is_client:
-            input_handler = Process(target = nonbound_input_handler, args=(LOOPBACK_ADDR, PORT, is_server, False))
+            input_handler = Process(target = nonbound_input_handler, args=(ip_address, PORT, is_server, False))
             input_handler.start()
-            init_client(LOOPBACK_ADDR, PORT, input_handler)
+            init_client(ip_address, PORT, input_handler)
         elif is_auto:
-            input_handler = Process(target = nonbound_input_handler, args=(LOOPBACK_ADDR, PORT, is_server, True))
+            input_handler = Process(target = nonbound_input_handler, args=(ip_address, PORT, is_server, True))
             input_handler.start()
-            init_auto(LOOPBACK_ADDR, PORT, input_handler)
+            init_auto(ip_address, PORT, input_handler)
 
     elif is_help:
         print_help_message()
