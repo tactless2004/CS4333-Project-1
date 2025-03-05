@@ -1,11 +1,35 @@
 from socket import socket, AF_INET, SOCK_STREAM
 import sys
 from threading import Thread
-from time import sleep
 from multiprocessing import Process
 import os
 import signal
-from psutil import pid_exists
+from psutil import pid_exists # Check if  a Windows Process still exists, useful in input handler logic.
+
+# CS 4333 Project 1
+
+# General Structure:
+#       User Invokes Talk.py.
+#       /                   \
+#   Host/Client Mode    Server Mode
+#       |                   |
+#       ---------------------
+#    Communication over network sockets
+#
+#   Notes:
+#       - Why do I use Processes someplaces and Threads others?
+#           -   Threads in python largely control themselves, and must have self contained logic for exitting (no master exit controller allowed).
+#               Processes may be killed at my discresion. The sys.sydin.readline() blocks, so any logic to detect if Talk.py should stop accepting input
+#               only gets processed when a keyboard input is sent. In this case, I want the input handler to be a process that I can kill at my discresion.
+#       - Why do I have two input handlers?
+#           -   When the program first inits, it's either a server bound on a socket waiting to be connected to or a client trying to connect to a server.
+#           -   for this period of time I want an input handler that handles 'STATUS' and 'QUIT' messages, but doesn't attempt to send. Also, if a server is connected
+#               to a client, the client disconnects and the server is back in listening state, we want this non-sending input handler.
+#       - Why is there generic_send() and generic_receieve() instead of server/client specific functions?
+#           -   The server send and client send are basically the same, the only difference is how the server can have multiple client interactions before it exits.
+#           -   If a project requirement was to support multiple clients simulataneously, we would need a server_receive() function.
+#
+
 # Global Constants
 # TODO: maybe we do something more elegant later
 LOOPBACK_ADDR = '127.0.0.1'
@@ -70,16 +94,25 @@ def init_server(ip_address: str, port: int, input_handler: Process) -> None:
                 Listening = False  # If the server sends EXIT, then the server side should close too.
 
 def init_client(ip_address: str, port: int, input_handler: Process) -> None:
+    # 1. Init Client
     client_socket = socket(AF_INET, SOCK_STREAM)
+    
+    # 2. Attempt to connect to the server.
     try:
         client_socket.connect((ip_address, port))
     except ConnectionRefusedError:
         print_runtime_error("Client unable to communicate with server.")
-
-    server_address = client_socket.getpeername()
+    
+    # Need this data for 'STATUS' request
+    server_address = client_socket.getpeername()    
     (ip_address, port) = client_socket.getsockname()
+
+    # 3. Kill the non-bound input handler.
     os.kill(input_handler.pid, signal.SIGINT) # Replace the nonbound input handler with a socket bound input handler
-    closed_state = [False]
+
+    closed_state = [False] # This variable is shared between sender and receiver, if the sender sends exit it tells its own receiver to exit via this variable (and vice-versa).
+
+    # 4. Start the receiver
     Thread(target=generic_receive, args=(ip_address, port, client_socket, closed_state), daemon=True).start()
     send = Process(target=generic_send, args=(ip_address, port, client_socket, False, server_address, closed_state)) # Changed this to not thread
     send.start()
@@ -142,9 +175,6 @@ def nonbound_input_handler(ip_address: str, port: int, is_server: bool) -> None:
                 print(f"[STATUS] Client: {ip_address}:{port}; Server: NONE\n")
         if message.strip() == "QUIT":
             sys.exit() # I don't think this is a project requirement, but it couldn't hurt to process QUIT while not bound on either end.
-
-
-
 
 if __name__ == "__main__":
     sys.argv = sys.argv[1:] # Strip 'Talk.py' from argv
