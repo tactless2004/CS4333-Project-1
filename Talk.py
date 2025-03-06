@@ -201,9 +201,9 @@ def generic_send(ip_address: str, port: int, client_socket: socket, is_server: b
 
         elif sent_status:
             if is_server:
-                print(f"[STATUS] Client: {client_address[0]}:{client_address[1]}; Server: {ip_address}:{port}")
+                print(f"{Fore.GREEN}[STATUS]{Fore.RESET} Client: {client_address[0]}:{client_address[1]}; Server: {ip_address}:{port}")
             else:
-                print(f"[STATUS] Client: {ip_address}:{port}; Server: {client_address[0]}:{client_address[1]}")
+                print(f"{Fore.GREEN}[STATUS]{Fore.RESET} Client: {ip_address}:{port}; Server: {client_address[0]}:{client_address[1]}")
 
         elif message:
             client_socket.send(f"{message}".encode())
@@ -232,11 +232,11 @@ def nonbound_input_handler(ip_address: str, port: int, is_server: bool, auto_mod
         message = sys.stdin.readline()
         if message.strip() == "STATUS":
             if auto_mode:
-                print(f"[STATUS] Client: NONE; Server: NONE")
+                print(f"{Fore.GREEN}[STATUS]{Fore.RESET} Client: NONE; Server: NONE")
             elif is_server:
-                print(f"[STATUS] Client: NONE; Server: {ip_address}:{port}")
+                print(f"{Fore.GREEN}[STATUS]{Fore.RESET} Client: NONE; Server: {ip_address}:{port}")
             elif not is_server:
-                print(f"[STATUS] Client: {ip_address}:{port}; Server: NONE")
+                print(f"{Fore.GREEN}[STATUS]{Fore.RESET} Client: {ip_address}:{port}; Server: NONE")
             else:
                 print(f"Check Semantic Logic, this should be impossible.")
 
