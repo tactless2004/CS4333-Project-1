@@ -220,7 +220,7 @@ def generic_receive(client_socket: socket, closed_state: list) -> None:
                 client_socket.close()
 
             elif message:
-                print(f"[remote] {message.decode()}", end="")
+                print(f"{Fore.GREEN}[remote]{Fore.RESET} {message.decode()}", end="")
         except ConnectionResetError:
             Connected = False
         except ConnectionAbortedError:
